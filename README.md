@@ -81,7 +81,7 @@ Customize the tool's behavior by editing appsettings.json:
 - API Settings:
     - Url: Url of the API.
     - Model: Model of the API you want to use.
-    - ApiKey: Your API kay.
+    - ApiKey: Your API key.
 
 - Requests Settings:
     - MaxConcurrentRequests: The maximum number of simultaneous translation requests to send to the LLM.
