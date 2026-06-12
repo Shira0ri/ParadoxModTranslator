@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using System.Text.RegularExpressions;
 
 namespace ModTranslator.BLL.Services.TranslateFiles
 {
@@ -27,31 +28,16 @@ namespace ModTranslator.BLL.Services.TranslateFiles
             _concurrentRequestsLimiter = new(appSettings.RequestsSettings.MaxConcurrentRequests);
         }
 
-        /// <summary>
-        /// Translates multiple localization files using an external API and writes the translations to output files.
-        /// It manages concurrency, avoids re-translating existing lines, and handles errors during translation.
-        /// </summary>
-        /// <param name="request">The translation request containing file paths and language details.</param>
-        /// <returns>A tuple indicating success and a message describing the outcome.</returns>
         public async Task<(bool isSuccess, string message)> TranslateFiles(TranslationRequest request)
         {
             if (_appSettings.APISettings.ApiKey == "Put your API key here and edit Url and Model to match yours.")
-            {
                 return (false, "Go into the appsettings.json file and input your API settings.");
-            }
 
             foreach (string filePath in request.Files)
             {
                 List<string>? fileLines = await GetFileContent(filePath);
-                if (fileLines == null)
-                {
-                    return (false, ConstantStrings.ErrorNullUploadedFile);
-                }
-
-                if (!SetLanguageCode(fileLines[0]))
-                {
-                    return (false, ConstantStrings.InvalidLanguageValueInFirstLine);
-                }
+                if (fileLines == null) return (false, ConstantStrings.ErrorNullUploadedFile);
+                if (!SetLanguageCode(fileLines[0])) return (false, ConstantStrings.InvalidLanguageValueInFirstLine);
 
                 string fileName = Path.GetFileName(filePath);
                 string outputFilePath = await CreateTranslatedFileIfDontExist(request.CurrentPath, fileName, fileLines);
@@ -60,37 +46,38 @@ namespace ModTranslator.BLL.Services.TranslateFiles
                 {
                     string[] existingLines = await File.ReadAllLinesAsync(outputFilePath);
                     HashSet<string> existingKeys = [];
+                    Regex keyExtractPattern = new(@"^[ \t]*([\w\.\-]+):\d*[ \t]*");
 
                     foreach (string? line in existingLines.Skip(1))
                     {
-                        string trimmedLine = line.Trim();
-                        if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith('#'))
+                        if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#')) continue;
+                        Match m = keyExtractPattern.Match(line);
+                        if (m.Success) existingKeys.Add(m.Groups[1].Value);
+                    }
+
+                    List<string> filteredFileLines = [];
+                    bool skipCurrentMultiline = false;
+
+                    foreach (string line in fileLines)
+                    {
+                        if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#'))
                         {
+                            filteredFileLines.Add(line);
                             continue;
                         }
 
-                        int colonIndex = trimmedLine.IndexOf(':');
-                        if (colonIndex > 0)
+                        Match m = keyExtractPattern.Match(line);
+                        if (m.Success)
                         {
-                            string key = trimmedLine[..colonIndex].Trim();
-                            _ = existingKeys.Add(key);
+                            skipCurrentMultiline = existingKeys.Contains(m.Groups[1].Value);
+                            if (!skipCurrentMultiline) filteredFileLines.Add(line);
+                        }
+                        else if (!skipCurrentMultiline)
+                        {
+                            filteredFileLines.Add(line);
                         }
                     }
-
-                    fileLines = [.. fileLines
-                        .Where(line =>
-                        {
-                            string trimmedLine = line.Trim();
-                            if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith('#')){
-                                return true;
-                            }
-                            int colonIndex = trimmedLine.IndexOf(':');
-                            if (colonIndex == -1 || colonIndex == 0) {
-                                return true;
-                            }
-                            string key = trimmedLine[..colonIndex].Trim();
-                            return !existingKeys.Contains(key);
-                        })];
+                    fileLines = filteredFileLines;
                 }
 
                 using SemaphoreSlim fileWriteLock = new(1, 1);
@@ -115,32 +102,53 @@ namespace ModTranslator.BLL.Services.TranslateFiles
                 {
                     workers.Add(Task.Run(async () =>
                     {
-                        while (await workChannel.Reader.WaitToReadAsync())
+                        (int index, string line)? leftoverTask = null;
+
+                        while (leftoverTask != null || await workChannel.Reader.WaitToReadAsync())
                         {
-                            while (workChannel.Reader.TryRead(out var task))
+                            List<string> originalLinesBatch = [];
+                            List<string> linesToSendToApi = [];
+                            int currentCharacterCount = 0;
+                            int maxCharacterLimit = 1500;
+
+                            if (leftoverTask != null)
                             {
-                                var (index, line) = task;
+                                originalLinesBatch.Add(leftoverTask.Value.line);
+                                linesToSendToApi.Add(leftoverTask.Value.line.Trim());
+                                currentCharacterCount += leftoverTask.Value.line.Length;
+                                leftoverTask = null;
+                            }
 
-                                List<string> linesToTranslate = [line.Trim()];
-                                string? translation = await GetTranslationFromAPI(linesToTranslate);
-
-                                if (translation == null)
+                            while (originalLinesBatch.Count < _appSettings.RequestsSettings.MaxLengthOfRequests &&
+                                   currentCharacterCount < maxCharacterLimit)
+                            {
+                                if (workChannel.Reader.TryRead(out var task))
                                 {
-                                    HasErrors = true;
-                                    continue;
+                                    if (originalLinesBatch.Count > 0 && currentCharacterCount + task.line.Length > maxCharacterLimit)
+                                    {
+                                        leftoverTask = task;
+                                        break;
+                                    }
+
+                                    originalLinesBatch.Add(task.line);
+                                    linesToSendToApi.Add(task.line.Trim());
+                                    currentCharacterCount += task.line.Length;
                                 }
+                                else break;
+                            }
 
-                                List<string> outputLines = ProcessTranslation(linesToTranslate, translation);
+                            if (originalLinesBatch.Count == 0) continue;
 
+                            List<string> outputLines = await SafeTranslateBatch(originalLinesBatch, linesToSendToApi);
+
+                            if (outputLines.Count > 0)
+                            {
                                 await fileWriteLock.WaitAsync();
                                 try
                                 {
                                     await File.AppendAllTextAsync(outputFilePath, string.Join('\n', outputLines) + Environment.NewLine);
                                 }
-                                finally
-                                {
-                                    fileWriteLock.Release();
-                                }
+                                finally { fileWriteLock.Release(); }
                             }
                         }
                     }));
@@ -151,102 +159,61 @@ namespace ModTranslator.BLL.Services.TranslateFiles
             }
 
             string result = "Translation finished.";
-            if (HasErrors)
-            {
-                result += "\nThere could be errors in the translation, please review the files.";
-            }
-
+            if (HasErrors) result += "\nThere could be errors in the translation, please review the files.";
             return (!HasErrors, result);
         }
 
-        /// <summary>
-        /// Processes a group of lines for translation by sending them to the translation API, 
-        /// then appends the translated results to the output file in a thread-safe manner.
-        /// </summary>
-        /// <param name="fileLines">All lines from the original file.</param>
-        /// <param name="startIndex">The starting index of lines to translate.</param>
-        /// <param name="outputFilePath">The path of the file to append translated lines to.</param>
-        /// <param name="fileWriteLock">A semaphore to synchronize file write access.</param>
-        /// <param name="processedIndices">A set tracking which line indices have been processed.</param>
-        /// <param name="lockObject">An object used for locking when accessing shared collections.</param>
-        /// <returns>A Task representing the asynchronous operation.</returns>
-        private async Task ProcessTranslationGroup(
-            List<string> fileLines,
-            int startIndex,
-            string outputFilePath,
-            SemaphoreSlim fileWriteLock,
-            HashSet<int> processedIndices,
-            object lockObject)
+        private async Task<List<string>> SafeTranslateBatch(List<string> originalLinesBatch, List<string> linesToSendToApi)
         {
-            await _concurrentRequestsLimiter.WaitAsync();
-            try
+            string? batchTranslation = await GetTranslationFromAPI(linesToSendToApi, isStrict: false);
+            if (batchTranslation != null)
             {
-                List<string> linesBeingTranslated = [];
-                List<int> indicesBeingTranslated = [];
+                List<string> processedBatch = ProcessTranslation(originalLinesBatch, batchTranslation);
+                if (!processedBatch.Any(line => Regex.IsMatch(line, @"[\p{IsCJKUnifiedIdeographs}]")))
+                    return processedBatch;
 
-                lock (lockObject)
-                {
-                    for (int i = startIndex; i < fileLines.Count; i++)
-                    {
-                        if (!processedIndices.Contains(i))
-                        {
-                            linesBeingTranslated.Add(fileLines[i].Trim());
-                            indicesBeingTranslated.Add(i);
-                            _ = processedIndices.Add(i);
-                        }
-
-                        if (linesBeingTranslated.Count >= _appSettings.RequestsSettings.MaxLengthOfRequests)
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                if (linesBeingTranslated.Count == 0)
-                {
-                    return;
-                }
-
-                string? translation = await GetTranslationFromAPI(linesBeingTranslated);
-
-                if (translation == null)
-                {
-                    return;
-                }
-
-                List<string> outputContent = ProcessTranslation(linesBeingTranslated, translation);
-
-                await fileWriteLock.WaitAsync();
-                try
-                {
-                    await File.AppendAllTextAsync(outputFilePath, string.Join('\n', outputContent) + Environment.NewLine);
-                }
-                finally
-                {
-                    _ = fileWriteLock.Release();
-                }
+                Console.WriteLine("⚠️ Language bleed detected in batch! Falling back to line-by-line translation...");
             }
-            finally
+
+            List<string> finalSafeLines = new();
+            for (int i = 0; i < originalLinesBatch.Count; i++)
             {
-                _ = _concurrentRequestsLimiter.Release();
+                string origLine = originalLinesBatch[i];
+                string apiLine = linesToSendToApi[i];
+
+                string? singleTrans = await GetTranslationFromAPI(new List<string> { apiLine }, isStrict: false);
+                List<string> singleProcessed = singleTrans != null
+                    ? ProcessTranslation(new List<string> { origLine }, singleTrans)
+                    : new List<string> { origLine };
+
+                if (singleTrans != null && singleProcessed.Any(line => Regex.IsMatch(line, @"[\p{IsCJKUnifiedIdeographs}]")))
+                {
+                    Console.WriteLine($"🔥 Extreme Language Bleed detected. Engaging STRICT mode for line...");
+                    string? strictTrans = await GetTranslationFromAPI(new List<string> { apiLine }, isStrict: true);
+                    if (strictTrans != null)
+                        singleProcessed = ProcessTranslation(new List<string> { origLine }, strictTrans);
+                }
+
+                finalSafeLines.AddRange(singleProcessed);
             }
+            return finalSafeLines;
         }
 
-        /// <summary>
-        /// Sends a batch of lines to the translation API and returns the translated text.
-        /// Handles API request setup, serialization, and error handling.
-        /// </summary>
-        /// <param name="lines">The lines to translate.</param>
-        /// <returns>The translated text returned from the API or null if an error occurs.</returns>
-        private async Task<string?> GetTranslationFromAPI(List<string> lines)
+        private async Task<string?> GetTranslationFromAPI(List<string> lines, bool isStrict)
         {
+            string batchedText = string.Join('\n', lines);
+            string systemPrompt = isStrict ? GenerateStrictSystemPrompt() : GenerateSystemPrompt();
+            string userPrompt = isStrict
+                ? $"Translate the following text to English.\n{batchedText}\n[WARNING: YOU MUST NOT OUTPUT ANY CHINESE CHARACTERS. ONLY ENGLISH.]"
+                : $"Translate this:\n{batchedText}\n[End of text. You MUST reply ONLY with the English translation. Do not output Chinese. Do not output conversational filler. Do not use markdown.]";
+
             APIRequest.Data requestBody = new()
             {
                 Model = _appSettings.APISettings.Model,
                 Messages =
                 [
-                    new APIRequest.Message { Role = "system", Content = GenerateSystemPrompt() },
-                    new APIRequest.Message { Role = "user", Content = string.Join('\n', lines) }
+                    new APIRequest.Message { Role = "system", Content = systemPrompt },
+                    new APIRequest.Message { Role = "user", Content = userPrompt }
                 ]
             };
 
@@ -272,104 +239,207 @@ namespace ModTranslator.BLL.Services.TranslateFiles
             }
         }
 
-        /// <summary>
-        /// Generates the system prompt message used to instruct the translation API about the task context.
-        /// It includes language information and instructions to preserve placeholders.
-        /// </summary>
-        /// <returns>A string containing the system prompt for the translation API.</returns>
         private string GenerateSystemPrompt()
         {
             return $"""
-            You are an expert game localization translator for Paradox Interactive. You are translating a Stellaris sci-fi/fantasy mod from Simplified Chinese to {LanguagesManager.GetLanguageKey(LanguageCode)}.
+            You are an expert game localization translator for Paradox Interactive. You are translating a Stellaris sci-fi mod from Simplified Chinese to {LanguagesManager.GetLanguageKey(LanguageCode)}.
             
             CRITICAL DIRECTIVES:
-            1. 1-TO-1 LINE MATCHING: You must return exactly the same number of lines you receive. Do NOT split a single translation across multiple lines.
-            2. PRESERVE THE IDENTIFIER: Keep the original localization identifier exactly as it was. (Example: If the input starts with `some_key:`, your translation MUST start with `some_key:`).
-            3. ZERO OMISSIONS: Translate the entire string exactly. Do not summarize or use ellipses (...).
-            4. PRESERVE FORMATTING: Never translate, remove, or alter Stellaris codes (e.g., §W, §!, £energy£, [Root.GetName]). 
-            5. KEEP LITERAL NEWLINES: The original text uses the literal string characters "\n" to represent line breaks. You MUST keep them as literal "\n" characters in your response. Do NOT create actual new line breaks in the output text.
-            6. ZERO ADDITIONS: Output ONLY the translated strings. No greetings, no markdown blocks, no conversational filler.
-
-            EXAMPLES OF CORRECT BEHAVIOR:
-            Original: example_weapon_1: "§W破灭之光§!"
-            Translated: example_weapon_1: "§WBombardment of Light!§!"
+            1. 1-TO-1 LINE MATCHING: Return EXACTLY the same number of lines. 
+            2. NO MARKDOWN: Do NOT use ``` blocks. Do NOT number the lines (1. 2. 3.).
+            3. PRESERVE THE IDENTIFIER: Keep the original localization identifier exactly as it was.
+            4. ENGINE CODES (CRITICAL): Stellaris uses strict formatting codes. You MUST NOT translate the text inside these codes, and you MUST keep them exactly where they are:
+               - Bracket Variables: [Root.GetName], [This.Owner]
+               - Dollar Sign Macros: $NAME_KEY$, $VALUE|*x$
+               - Icon Pound Codes: £energy£, £minerals£
+               - Color Codes: §R, §G, §H, §Y, etc. AND their terminator §!
+               - Escape Characters: \n (newline) and \t (tab).
+            5. VARIABLE PRESERVATION: 
+               - NEVER modify the symbols around variables. $MACRO$ must remain $MACRO$. Do NOT change it to §MACRO$ or alter the brackets.
+               - If you open a bracket [, you MUST close it with ].
+               - NEVER use $ for money (e.g., do NOT write "50$"). Stellaris uses £energy£ instead.
+            6. ZERO ADDITIONS: Output ONLY the translated strings. Do not output conversational filler.
+            """;
+        }
+        private string GenerateStrictSystemPrompt()
+        {
+            return $"""
+            You are a strict translation machine for the game Stellaris. 
+            Your ONLY purpose is to translate text into {LanguagesManager.GetLanguageKey(LanguageCode)}.
             
-            Original: fake_event.01.desc: "在[Root.GetName]上发生了爆炸！\n我们需要立刻派人调查。\n否则后果不堪设想。"
-            Translated: fake_event.01.desc: "An explosion occurred on [Root.GetName]!\nWe need to send someone to investigate immediately.\nOtherwise, the consequences will be unimaginable."
+            FATAL ERROR PROTOCOL: 
+            - If you output even ONE Chinese character, the system will crash.
+            - If you translate the english words inside £icons£, $macros$, or [Variables], the system will crash.
+            - If you alter §Color codes or \n line breaks, the system will crash.
+            
+            Do not explain. Do not apologize. Keep all formatting variables strictly intact.
+            TRANSLATE THE TEXT INTO ENGLISH NOW:
             """;
         }
 
-        /// <summary>
-        /// Processes the raw translated text returned from the API, pairing it with the original lines,
-        /// and formats the output to maintain keys and translated values.
-        /// Detects mismatches in line counts and flags errors if necessary.
-        /// </summary>
-        /// <param name="originalLines">The original lines sent for translation.</param>
-        /// <param name="translation">The translated text returned from the API.</param>
-        /// <returns>A list of formatted translated lines ready for output.</returns>
         private List<string> ProcessTranslation(List<string> originalLines, string translation)
         {
             List<string> result = [];
 
-            string[] translatedLines = translation.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            translation = Regex.Replace(translation, @"(?i)^Here is the translation:\s*", "");
 
-            if (originalLines.Count != translatedLines.Length)
+            List<string> rawTranslatedLines = translation
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Trim())
+                .Where(l => !l.StartsWith("```") && !string.IsNullOrWhiteSpace(l))
+                .ToList();
+
+            if (originalLines.Count != rawTranslatedLines.Count) HasErrors = true;
+
+            int transIndex = 0;
+            Regex origKeyPattern = new(@"^([ \t]*[\w\.\-]+):(\d*)[ \t]*");
+            Regex aiGarbagePattern = new(@"^(\d+\.[ \t]*|\-[ \t]*|\*?\*?[\w\.\-]+:\d*[ \t]*)");
+
+            for (int i = 0; i < originalLines.Count; i++)
             {
-                HasErrors = true;
-                result = ["#Error: Mismatch in translated lines count. Review the following:",
-                    .. translatedLines.Select(line => $"  {line}")];
-            }
-            else
-            {
-                try
+                string original = originalLines[i];
+                string translated = transIndex < rawTranslatedLines.Count ? rawTranslatedLines[transIndex] : original.TrimStart();
+                transIndex++;
+
+                Match origMatch = origKeyPattern.Match(original);
+
+                if (origMatch.Success)
                 {
-                result = [.. originalLines.Zip(translatedLines, (original, translated) =>
-                    {
-                        int colonIndex = original.IndexOf(':');
-                        if (colonIndex == -1) { return original; } string key = original[..colonIndex].Trim();
-                        string value = translated.Split(':', 2)[1].Trim();
-                        return $"  {key}: {value}";
-                    })
-                ];
-            }
-                catch (Exception)
+                    string keyName = origMatch.Groups[1].Value;
+                    string versionNum = origMatch.Groups[2].Value;
+                    if (string.IsNullOrEmpty(versionNum)) versionNum = "0";
+
+                    string forcedPrefix = $"{keyName}:{versionNum} ";
+
+                    string cleanTranslatedText = translated;
+                    Match transMatch = aiGarbagePattern.Match(translated);
+                    if (transMatch.Success)
+                        cleanTranslatedText = translated.Substring(transMatch.Length).TrimStart(' ', '\t', '*');
+
+                    cleanTranslatedText = SanitizeTranslationText(cleanTranslatedText);
+                    result.Add($"{forcedPrefix}\"{cleanTranslatedText}\"");
+                }
+                else
                 {
-                    HasErrors = true;
-                    result = ["#Error: Could not split the translation into key:value. Review the following:"];
-                    result.AddRange(originalLines.Zip(translatedLines, (original, translated) =>
-                        $"  Original: {original}\n  Translated: {translated}"));
+                    result.Add(SanitizeTranslationText(translated));
                 }
             }
             return result;
         }
 
         /// <summary>
-        /// Creates the translated output file if it does not already exist.
-        /// Initializes the file with the first line from the original content.
+        /// Phase 1 & 2 of the Bulletproof Vault. Purges illegal characters and mathematically Auto-Heals orphaned variables.
         /// </summary>
-        /// <param name="currentPath">The base directory path for output files.</param>
-        /// <param name="fileName">The name of the original file.</param>
-        /// <param name="fileLines">The original file's lines.</param>
-        /// <returns>The full path to the translated output file.</returns>
+        /// <summary>
+        /// Phase 1 & 2 of the Bulletproof Vault. Purges illegal characters and mathematically Auto-Heals orphaned variables.
+        /// </summary>
+        private string SanitizeTranslationText(string text)
+        {
+            string clean = text;
+
+            // 0. PURGE ILLEGAL UNICODE / CJK PUNCTUATION
+            // 0. PURGE ILLEGAL UNICODE / CJK PUNCTUATION
+            clean = clean.Replace("“", "\"").Replace("”", "\"").Replace("„", "\"")
+                         .Replace("‘", "'").Replace("’", "'").Replace("‚", "'")
+                         .Replace("–", "-").Replace("—", "-").Replace("…", "...")
+                         .Replace("、", ", ").Replace("。", ". ")
+                         .Replace("！", "!").Replace("？", "?")
+                         .Replace("：", ":").Replace("；", ";")
+                         .Replace("（", "(").Replace("）", ")")
+                         .Replace("【", "[").Replace("】", "]"); // <- NEW: Safely converts CJK brackets to standard brackets
+
+            // A. Strip outer wrapping quotes
+            if (clean.StartsWith("\"") && clean.EndsWith("\"") && clean.Length >= 2)
+                clean = clean.Substring(1, clean.Length - 2);
+            else if (clean.StartsWith("\"")) clean = clean.Substring(1);
+            else if (clean.EndsWith("\"")) clean = clean.Substring(0, clean.Length - 1);
+
+            // B. Escape all inner quotes
+            clean = clean.Replace("\\\"", "\"").Replace("\"", "\\\"");
+
+            // C. Eject possessive 's from Variables & Strip remaining inner apostrophes
+            clean = Regex.Replace(clean, @"\[([^\]]+)'s\]", "[$1]'s");
+            clean = Regex.Replace(clean, @"\$([^$]+)'s\$", "$$$1$$'s");
+            clean = Regex.Replace(clean, @"\[(.*?)\]", m => m.Value.Replace("'", ""));
+            clean = Regex.Replace(clean, @"\$(.*?)\$", m => m.Value.Replace("'", ""));
+
+            // D. Purge rogue backslashes (Allows \[ and \] safely)
+            clean = Regex.Replace(clean, @"\\(?![n""t\[\]])", "");
+
+            // E. Auto-Heal specific AI Hallucinations
+            clean = clean.Replace("§{", "$").Replace("}$", "$");     // Reverts the §{MACRO}$ hallucination
+            clean = clean.Replace(":$", "§").Replace(": $", "§");    // Reverts the :$Y hallucination
+
+            // ---> YOUR NEW INVERSE MACRO FIXES <---
+            // 1. Converts §MACRO$ into $MACRO$
+            clean = Regex.Replace(clean, @"§(?=[\w\|\*\+\-]+\$)", "$$");
+
+            // 2. Converts $MACRO§ into $MACRO$ (But uses (?!!) to ensure it doesn't accidentally destroy a §! terminator)
+            clean = Regex.Replace(clean, @"(?<=\$[\w\|\*\+\-]+)§(?!!)", "$$");
+
+            // ---> YOUR TERMINATOR LOOKAHEAD FIX <---
+            // Converts $ to § ONLY IF there is a valid color letter AND a §! terminator waiting for it later.
+            clean = Regex.Replace(clean, @"\$([WTgLPRSHKYIGVECBM_cvdrl!])(?=[^§\$]*§!)", "§$1");
+
+            // General fallback: Fixes $YTrade (Converts $ to § if followed by a Color letter AND a lowercase word)
+            clean = Regex.Replace(clean, @"(?<!\w)\$([WTgLPRSHKYIGVECBM_cvdrl!])(?=[a-z]|\s|[A-Z][a-z])", "§$1");
+
+            clean = Regex.Replace(clean, @"§\s+", "§");              // Fixes "§ W" spacing issues
+
+            // Converts invalid/orphaned § into a terminator (e.g., "Trade Value§" securely becomes "Trade Value§!")
+            clean = Regex.Replace(clean, @"§(?![WTgLPRSHKYIGVECBM_cvdrl!])", "§!");
+
+            // F. FORCE TAG PARITY (Mathematical Orphan Purger)
+
+            // Fix '$' Orphans (e.g. 50$)
+            if (clean.Count(c => c == '$') % 2 != 0)
+            {
+                clean = Regex.Replace(clean, @"(?<=\d)\$|\$(?=\d|\s|$)", ""); // Delete $ touching numbers or empty space
+                if (clean.Count(c => c == '$') % 2 != 0)
+                {
+                    int lastIdx = clean.LastIndexOf('$');
+                    if (lastIdx >= 0) clean = clean.Remove(lastIdx, 1); // Delete the absolute last one if still unbalanced
+                }
+            }
+
+            // Fix '£' Orphans
+            if (clean.Count(c => c == '£') % 2 != 0)
+            {
+                int lastIdx = clean.LastIndexOf('£');
+                if (lastIdx >= 0) clean = clean.Remove(lastIdx, 1);
+            }
+
+            // Fix Bracket '[' ']' Orphans
+            int openBrackets = clean.Count(c => c == '[');
+            int closeBrackets = clean.Count(c => c == ']');
+            while (openBrackets > closeBrackets)
+            {
+                int idx = clean.LastIndexOf('[');
+                if (idx >= 0) clean = clean.Remove(idx, 1);
+                openBrackets--;
+            }
+            while (closeBrackets > openBrackets)
+            {
+                int idx = clean.LastIndexOf(']');
+                if (idx >= 0) clean = clean.Remove(idx, 1);
+                closeBrackets--;
+            }
+
+            return clean;
+        }
         private async Task<string> CreateTranslatedFileIfDontExist(string currentPath, string fileName, List<string> fileLines)
         {
             string outputFolder = Path.Combine(currentPath, "TranslatedFiles", "localisation", "replace", LanguageCode);
             _ = Directory.CreateDirectory(outputFolder);
-            string outputFilePath = Path.Combine(outputFolder, fileName.Replace("_ToBeTranslated", "_Translated"));
+            string cleanFileName = fileName.Replace("ModTranslator_ToBeTranslated_", "");
+            string outputFilePath = Path.Combine(outputFolder, cleanFileName);
 
             if (!File.Exists(outputFilePath))
-            {
                 await File.WriteAllBytesAsync(outputFilePath, [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(fileLines[0] + Environment.NewLine)]);
-            }
 
             return outputFilePath;
         }
 
-        /// <summary>
-        /// Sets the language code and language name based on the first line of the localization file.
-        /// </summary>
-        /// <param name="firstFileLine">The first line from the localization file, expected to contain the language code.</param>
-        /// <returns>True if the language code is valid and set successfully; otherwise, false.</returns>
         private bool SetLanguageCode(string firstFileLine)
         {
             LanguageCode = firstFileLine.Replace(":", "");
@@ -377,19 +447,9 @@ namespace ModTranslator.BLL.Services.TranslateFiles
             return !string.IsNullOrEmpty(LanguageName);
         }
 
-        /// <summary>
-        /// Reads all non-empty lines from a specified file asynchronously.
-        /// Returns null if the file path is invalid or if reading fails.
-        /// </summary>
-        /// <param name="filePath">The path of the file to read.</param>
-        /// <returns>A list of non-empty lines from the file or null on failure.</returns>
         private static async Task<List<string>?> GetFileContent(string? filePath)
         {
-            if (string.IsNullOrEmpty(filePath))
-            {
-                return null;
-            }
-
+            if (string.IsNullOrEmpty(filePath)) return null;
             try
             {
                 return await File.ReadAllLinesAsync(filePath).ContinueWith(t => t.Result.Where(line => !string.IsNullOrWhiteSpace(line)).ToList());

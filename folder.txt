@@ -1,0 +1,202 @@
+Folder PATH listing for volume New Game
+Volume serial number is A245-CB57
+G:.
+|   .gitattributes
+|   .gitignore
+|   folder.txt
+|   LICENSE
+|   ModTranslator.sln
+|   README.md
+|   UpgradeLog.htm
+|   
++---Backup
+|       ModTranslator.sln
+|       
++---ModTranslator
+|   |   appsettings.json
+|   |   Form1.cs
+|   |   Form1.Designer.cs
+|   |   Form1.resx
+|   |   ModTranslator.csproj
+|   |   ModTranslator.csproj.user
+|   |   Program.cs
+|   |   
+|   +---bin
+|   |   \---Debug
+|   |       \---net8.0-windows
+|   |           |   appsettings.json
+|   |           |   Microsoft.Extensions.Configuration.Abstractions.dll
+|   |           |   Microsoft.Extensions.Configuration.Binder.dll
+|   |           |   Microsoft.Extensions.Configuration.dll
+|   |           |   Microsoft.Extensions.Configuration.FileExtensions.dll
+|   |           |   Microsoft.Extensions.Configuration.Json.dll
+|   |           |   Microsoft.Extensions.DependencyInjection.Abstractions.dll
+|   |           |   Microsoft.Extensions.DependencyInjection.dll
+|   |           |   Microsoft.Extensions.FileProviders.Abstractions.dll
+|   |           |   Microsoft.Extensions.FileProviders.Physical.dll
+|   |           |   Microsoft.Extensions.FileSystemGlobbing.dll
+|   |           |   Microsoft.Extensions.Primitives.dll
+|   |           |   ModTranslator.BLL.dll
+|   |           |   ModTranslator.BLL.pdb
+|   |           |   ModTranslator.BO.dll
+|   |           |   ModTranslator.BO.pdb
+|   |           |   ModTranslator.deps.json
+|   |           |   ModTranslator.dll
+|   |           |   ModTranslator.exe
+|   |           |   ModTranslator.pdb
+|   |           |   ModTranslator.runtimeconfig.json
+|   |           |   System.IO.Pipelines.dll
+|   |           |   System.Text.Encodings.Web.dll
+|   |           |   System.Text.Json.dll
+|   |           |   
+|   |           \---runtimes
+|   |               \---browser
+|   |                   \---lib
+|   |                       \---net8.0
+|   |                               System.Text.Encodings.Web.dll
+|   |                               
+|   \---obj
+|       |   ModTranslator.csproj.nuget.dgspec.json
+|       |   ModTranslator.csproj.nuget.g.props
+|       |   ModTranslator.csproj.nuget.g.targets
+|       |   project.assets.json
+|       |   project.nuget.cache
+|       |   
+|       \---Debug
+|           \---net8.0-windows
+|               |   .NETCoreApp,Version=v8.0.AssemblyAttributes.cs
+|               |   apphost.exe
+|               |   ModTrans.46A58385.Up2Date
+|               |   ModTranslator.AssemblyInfo.cs
+|               |   ModTranslator.AssemblyInfoInputs.cache
+|               |   ModTranslator.assets.cache
+|               |   ModTranslator.csproj.AssemblyReference.cache
+|               |   ModTranslator.csproj.BuildWithSkipAnalyzers
+|               |   ModTranslator.csproj.CoreCompileInputs.cache
+|               |   ModTranslator.csproj.FileListAbsolute.txt
+|               |   ModTranslator.csproj.GenerateResource.cache
+|               |   ModTranslator.dll
+|               |   ModTranslator.Form1.resources
+|               |   ModTranslator.GeneratedMSBuildEditorConfig.editorconfig
+|               |   ModTranslator.genruntimeconfig.cache
+|               |   ModTranslator.GlobalUsings.g.cs
+|               |   ModTranslator.pdb
+|               |   ModTranslator.sourcelink.json
+|               |   
+|               +---ref
+|               |       ModTranslator.dll
+|               |       
+|               \---refint
+|                       ModTranslator.dll
+|                       
++---ModTranslator.BLL
+|   |   ModTranslator.BLL.csproj
+|   |   
+|   +---bin
+|   |   \---Debug
+|   |       \---net8.0
+|   |               ModTranslator.BLL.deps.json
+|   |               ModTranslator.BLL.dll
+|   |               ModTranslator.BLL.pdb
+|   |               ModTranslator.BO.dll
+|   |               ModTranslator.BO.pdb
+|   |               
+|   +---obj
+|   |   |   ModTranslator.BLL.csproj.nuget.dgspec.json
+|   |   |   ModTranslator.BLL.csproj.nuget.g.props
+|   |   |   ModTranslator.BLL.csproj.nuget.g.targets
+|   |   |   project.assets.json
+|   |   |   project.nuget.cache
+|   |   |   
+|   |   \---Debug
+|   |       \---net8.0
+|   |           |   .NETCoreApp,Version=v8.0.AssemblyAttributes.cs
+|   |           |   ModTrans.F7A1089A.Up2Date
+|   |           |   ModTranslator.BLL.AssemblyInfo.cs
+|   |           |   ModTranslator.BLL.AssemblyInfoInputs.cache
+|   |           |   ModTranslator.BLL.assets.cache
+|   |           |   ModTranslator.BLL.csproj.AssemblyReference.cache
+|   |           |   ModTranslator.BLL.csproj.BuildWithSkipAnalyzers
+|   |           |   ModTranslator.BLL.csproj.CoreCompileInputs.cache
+|   |           |   ModTranslator.BLL.csproj.FileListAbsolute.txt
+|   |           |   ModTranslator.BLL.dll
+|   |           |   ModTranslator.BLL.GeneratedMSBuildEditorConfig.editorconfig
+|   |           |   ModTranslator.BLL.GlobalUsings.g.cs
+|   |           |   ModTranslator.BLL.pdb
+|   |           |   ModTranslator.BLL.sourcelink.json
+|   |           |   
+|   |           +---ref
+|   |           |       ModTranslator.BLL.dll
+|   |           |       
+|   |           \---refint
+|   |                   ModTranslator.BLL.dll
+|   |                   
+|   \---Services
+|       +---GenerateFilesForTranslation
+|       |       GenerateFileToTranslateService.cs
+|       |       IGenerateFileToTranslateService.cs
+|       |       
+|       +---TranslateFiles
+|       |       ITranslateFilesService.cs
+|       |       TranslateFilesService.cs
+|       |       
+|       \---ValidateFiles
+|               IValidateFilesService.cs
+|               ValidateFilesService.cs
+|               
+\---ModTranslator.BO
+    |   ModTranslator.BO.csproj
+    |   
+    +---bin
+    |   \---Debug
+    |       \---net8.0
+    |               ModTranslator.BO.deps.json
+    |               ModTranslator.BO.dll
+    |               ModTranslator.BO.pdb
+    |               
+    +---Constants
+    |       ConstantStrings.cs
+    |       LanguagesManager.cs
+    |       
+    +---obj
+    |   |   ModTranslator.BO.csproj.nuget.dgspec.json
+    |   |   ModTranslator.BO.csproj.nuget.g.props
+    |   |   ModTranslator.BO.csproj.nuget.g.targets
+    |   |   project.assets.json
+    |   |   project.nuget.cache
+    |   |   
+    |   \---Debug
+    |       \---net8.0
+    |           |   .NETCoreApp,Version=v8.0.AssemblyAttributes.cs
+    |           |   ModTranslator.BO.AssemblyInfo.cs
+    |           |   ModTranslator.BO.AssemblyInfoInputs.cache
+    |           |   ModTranslator.BO.assets.cache
+    |           |   ModTranslator.BO.csproj.AssemblyReference.cache
+    |           |   ModTranslator.BO.csproj.BuildWithSkipAnalyzers
+    |           |   ModTranslator.BO.csproj.CoreCompileInputs.cache
+    |           |   ModTranslator.BO.csproj.FileListAbsolute.txt
+    |           |   ModTranslator.BO.dll
+    |           |   ModTranslator.BO.GeneratedMSBuildEditorConfig.editorconfig
+    |           |   ModTranslator.BO.GlobalUsings.g.cs
+    |           |   ModTranslator.BO.pdb
+    |           |   ModTranslator.BO.sourcelink.json
+    |           |   
+    |           +---ref
+    |           |       ModTranslator.BO.dll
+    |           |       
+    |           \---refint
+    |                   ModTranslator.BO.dll
+    |                   
+    \---Objects
+        +---API_DTO
+        |       APIRequest.cs
+        |       APIResponse.cs
+        |       
+        +---Requests
+        |       GenerateFileToTranslateRequest.cs
+        |       RunValidationRequest.cs
+        |       TranslationRequest.cs
+        |       
+        \---Settings
+                Settings.cs
+                
